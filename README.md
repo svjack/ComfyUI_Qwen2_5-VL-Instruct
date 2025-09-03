@@ -22,6 +22,9 @@ python txt_fix.py --source Sebastian_Michaelis_Videos_Qwen_VL_Captioned \
 
 python split_to_3.py
 
+mv only_ciel_files Prince_Ciel_Phantomhive_only_Videos_qwen_vl_captioned
+mv only_sebastian_files Sebastian_Michaelis_only_Videos_qwen_vl_captioned
+mv both_files Prince_Ciel_Phantomhive_Sebastian_Michaelis_both_Videos_qwen_vl_captioned
 ```
 
 # ComfyUI_Qwen2_5-VL-Instruct
