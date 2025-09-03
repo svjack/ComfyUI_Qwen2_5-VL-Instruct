@@ -1,4 +1,6 @@
 '''
+pip install moviepy==1.0.3
+
 git clone https://huggingface.co/datasets/svjack/Prince_Ciel_Phantomhive_Videos_Captioned
 
 python run_qwen_vl_video_caption.py Prince_Ciel_Phantomhive_Videos_Captioned Prince_Ciel_Phantomhive_Videos_Qwen_VL_Captioned \
@@ -17,6 +19,16 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from qwen_vl_utils import process_vision_info
+
+from moviepy.editor import VideoFileClip
+
+def get_video_duration(video_path):
+    """Get duration of video in seconds"""
+    try:
+        with VideoFileClip(video_path) as video:
+            return video.duration
+    except:
+        return float('inf')  # Return infinity if there's an error reading the file
 
 class Qwen2_VQA:
     def __init__(self, args):
@@ -72,6 +84,13 @@ class Qwen2_VQA:
         """处理单个视频文件"""
         # 复制视频文件到输出目录
         video_name = os.path.basename(video_path)
+
+        duration = get_video_duration(video_path)
+        print("video :", video_path, "duration :", duration)
+        if duration >= 10:
+            print("skip")
+            return
+        
         output_video_path = os.path.join(output_dir, video_name)
         shutil.copy2(video_path, output_video_path)
         
@@ -126,6 +145,7 @@ class Qwen2_VQA:
         # 保存结果到文本文件
         txt_filename = os.path.splitext(video_name)[0] + ".txt"
         txt_path = os.path.join(output_dir, txt_filename)
+        result = result.split("addCriterion")[0].strip()
         with open(txt_path, 'w', encoding='utf-8') as f:
             f.write(result)
         
