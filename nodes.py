@@ -149,11 +149,14 @@ class Qwen2_VQA:
             pil_image.save(temp_path)
 
         with torch.no_grad():
+            print("source_path :", source_path)
+            
             if source_path:
                 messages = [
                     {
                         "role": "system",
-                        "content": "You are QwenVL, you are a helpful assistant expert in turning images into words.",
+                        #"content": "You are QwenVL, you are a helpful assistant expert in turning images into words.",
+                        "content": '''You are QwenVL, you are a helpful assistant expert in turning images into words.\n 给你的视频中可能出现的主要人物为两个（可能出现一个或两个），当人物为一个戴眼罩的男孩时，男孩的名字是"夏尔",当人物是一个穿燕尾西服的成年男子时，男子的名字是"塞巴斯蒂安",在你的视频描述中要使用人物的名字并且简单描述人物的外貌及衣着。'''
                     },
                     {
                         "role": "user",
@@ -225,4 +228,7 @@ class Qwen2_VQA:
                     torch.cuda.empty_cache()  # release GPU memory
                     torch.cuda.ipc_collect()
 
+            return result
+            print("result :", result)
+            
             return (result,)
