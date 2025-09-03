@@ -1,4 +1,6 @@
 ```bash
+pip install moviepy==1.0.3
+
 git clone https://huggingface.co/datasets/svjack/Prince_Ciel_Phantomhive_Videos_Captioned
 
 python run_qwen_vl_video_caption.py Prince_Ciel_Phantomhive_Videos_Captioned Prince_Ciel_Phantomhive_Videos_Qwen_VL_Captioned \
