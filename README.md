@@ -6,6 +6,20 @@ git clone https://huggingface.co/datasets/svjack/Prince_Ciel_Phantomhive_Videos_
 python run_qwen_vl_video_caption.py Prince_Ciel_Phantomhive_Videos_Captioned Prince_Ciel_Phantomhive_Videos_Qwen_VL_Captioned \
 --system_content "You are QwenVL, you are a helpful assistant expert in turning images into words. 给你的视频中可能出现的主要人物为两个（可能出现一个或两个），当人物为一个戴眼罩的男孩时，男孩的名字是'夏尔',当人物是一个穿燕尾西服的成年男子时，男子的名字是'塞巴斯蒂安',在你的视频描述中要使用人物的名字并且简单描述人物的外貌及衣着。" --text "使用戴人物名字的中文描述视频内容"
 
+python txt_fix.py --source Prince_Ciel_Phantomhive_Videos_Qwen_VL_Captioned \
+--output Prince_Ciel_Phantomhive_Videos_qwen_vl_captioned \
+--search "塞巴斯蒂安" --replace "夏尔"
+
+git clone https://huggingface.co/datasets/svjack/Sebastian_Michaelis_Videos_Captioned
+
+python run_qwen_vl_video_caption.py Sebastian_Michaelis_Videos_Captioned \ 
+Sebastian_Michaelis_Videos_Qwen_VL_Captioned \
+--system_content "You are QwenVL, you are a helpful assistant expert in turning images into words. 给你的视频中可能出现的主要人物为两个（可能出现一个或两个），当人物为一个戴眼罩的男孩时，男孩的名字是'夏尔',当人物是一个穿燕尾西服的成年男子时，男子的名字是'塞巴斯蒂安',在你的视频描述中要使用人物的名字并且简单描述人物的外貌及衣着。" --text "使用戴人物名字的中文描述视频内容"
+
+python txt_fix.py --source Sebastian_Michaelis_Videos_Qwen_VL_Captioned \
+--output Sebastian_Michaelis_Videos_qwen_vl_captioned \
+--search "夏尔" --replace "塞巴斯蒂安"
+
 ```
 
 # ComfyUI_Qwen2_5-VL-Instruct
