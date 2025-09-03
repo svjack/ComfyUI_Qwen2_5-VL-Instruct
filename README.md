@@ -27,6 +27,72 @@ mv only_sebastian_files Sebastian_Michaelis_only_Videos_qwen_vl_captioned
 mv both_files Prince_Ciel_Phantomhive_Sebastian_Michaelis_both_Videos_qwen_vl_captioned
 ```
 
+<br/><br/><br/>
+
+```bash
+git clone https://huggingface.co/datasets/svjack/Prince_Ciel_Phantomhive_Sebastian_Michaelis_both_Videos_qwen_vl_captioned
+
+git clone https://huggingface.co/datasets/svjack/Sebastian_Michaelis_only_Videos_qwen_vl_captioned
+
+git clone https://huggingface.co/datasets/svjack/Prince_Ciel_Phantomhive_only_Videos_qwen_vl_captioned
+
+
+
+mkdir -p Ciel_Phantomhive_Sebastian_Michaelis
+
+# 进入源目录
+cd Prince_Ciel_Phantomhive_Sebastian_Michaelis_both_Videos_qwen_vl_captioned
+
+# 找出所有.mp4文件，提取其前缀，并限制150个
+find . -maxdepth 1 -name "*.mp4" | head -n 150 | while read mp4_file; do
+    base_name=$(basename "$mp4_file" .mp4)
+    # 查找对应的.txt文件
+    txt_file="${base_name}.txt"
+    if [ -f "$txt_file" ]; then
+        cp "$mp4_file" "$txt_file" ../Ciel_Phantomhive_Sebastian_Michaelis/
+    fi
+done
+
+cd ..
+
+
+mkdir -p Ciel_Phantomhive
+
+# 进入源目录
+cd Prince_Ciel_Phantomhive_only_Videos_qwen_vl_captioned
+
+# 找出所有.mp4文件，提取其前缀，并限制150个
+find . -maxdepth 1 -name "*.mp4" | head -n 150 | while read mp4_file; do
+    base_name=$(basename "$mp4_file" .mp4)
+    # 查找对应的.txt文件
+    txt_file="${base_name}.txt"
+    if [ -f "$txt_file" ]; then
+        cp "$mp4_file" "$txt_file" ../Ciel_Phantomhive/
+    fi
+done
+
+cd ..
+
+
+mkdir -p Sebastian_Michaelis
+
+# 进入源目录
+cd Sebastian_Michaelis_only_Videos_qwen_vl_captioned
+
+# 找出所有.mp4文件，提取其前缀，并限制150个
+find . -maxdepth 1 -name "*.mp4" | head -n 150 | while read mp4_file; do
+    base_name=$(basename "$mp4_file" .mp4)
+    # 查找对应的.txt文件
+    txt_file="${base_name}.txt"
+    if [ -f "$txt_file" ]; then
+        cp "$mp4_file" "$txt_file" ../Sebastian_Michaelis/
+    fi
+done
+
+cd ..
+
+```
+
 # ComfyUI_Qwen2_5-VL-Instruct
 
 This is an implementation of [Qwen2.5-VL-Instruct](https://github.com/QwenLM/Qwen2.5-VL) by [ComfyUI](https://github.com/comfyanonymous/ComfyUI), which includes, but is not limited to, support for text-based queries, video queries, single-image queries, and multi-image queries to generate captions or responses.
