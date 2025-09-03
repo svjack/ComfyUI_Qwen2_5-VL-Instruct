@@ -1,3 +1,11 @@
+```bash
+git clone https://huggingface.co/datasets/svjack/Prince_Ciel_Phantomhive_Videos_Captioned
+
+python run_qwen_vl_video_caption.py Prince_Ciel_Phantomhive_Videos_Captioned Prince_Ciel_Phantomhive_Videos_Qwen_VL_Captioned \
+--system_content "You are QwenVL, you are a helpful assistant expert in turning images into words. 给你的视频中可能出现的主要人物为两个（可能出现一个或两个），当人物为一个戴眼罩的男孩时，男孩的名字是'夏尔',当人物是一个穿燕尾西服的成年男子时，男子的名字是'塞巴斯蒂安',在你的视频描述中要使用人物的名字并且简单描述人物的外貌及衣着。" --text "使用戴人物名字的中文描述视频内容"
+
+```
+
 # ComfyUI_Qwen2_5-VL-Instruct
 
 This is an implementation of [Qwen2.5-VL-Instruct](https://github.com/QwenLM/Qwen2.5-VL) by [ComfyUI](https://github.com/comfyanonymous/ComfyUI), which includes, but is not limited to, support for text-based queries, video queries, single-image queries, and multi-image queries to generate captions or responses.
