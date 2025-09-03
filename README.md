@@ -20,6 +20,8 @@ python txt_fix.py --source Sebastian_Michaelis_Videos_Qwen_VL_Captioned \
 --output Sebastian_Michaelis_Videos_qwen_vl_captioned \
 --search "夏尔" --replace "塞巴斯蒂安"
 
+python split_to_3.py
+
 ```
 
 # ComfyUI_Qwen2_5-VL-Instruct
