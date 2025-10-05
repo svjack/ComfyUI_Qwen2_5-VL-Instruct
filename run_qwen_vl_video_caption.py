@@ -34,15 +34,69 @@ from transformers import (
 )
 from qwen_vl_utils import process_vision_info
 
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, concatenate_videoclips
+import tempfile
+
+def create_sampled_video(video_path, sample_duration=5):
+    """从长视频中创建均匀采样的短视频[6,8](@ref)
+    
+    对于超过设定时长的视频，均匀采样帧生成一个指定时长的摘要视频
+    """
+    try:
+        with VideoFileClip(video_path) as video:
+            total_duration = video.duration
+            
+            # 如果视频时长小于等于采样时长，直接返回原视频路径
+            if total_duration <= sample_duration:
+                return video_path
+            
+            # 计算采样间隔：从总时长中均匀提取指定时长内容
+            segment_duration = 1.0  # 每个采样段持续1秒
+            segments_needed = sample_duration
+            interval = max(1.0, (total_duration - segment_duration) / segments_needed)
+            
+            # 创建临时文件保存采样视频
+            temp_dir = tempfile.gettempdir()
+            temp_video_path = os.path.join(temp_dir, f"sampled_{os.path.basename(video_path)}")
+            
+            # 生成采样视频片段列表[7,8](@ref)
+            clips = []
+            for i in range(segments_needed):
+                start_time = i * interval
+                end_time = min(start_time + segment_duration, total_duration)
+                
+                # 确保不超过视频总时长
+                if start_time >= total_duration:
+                    break
+                    
+                clip_segment = video.subclip(start_time, end_time)
+                clips.append(clip_segment)
+            
+            # 合并所有采样片段[6,7](@ref)
+            if clips:
+                final_clip = concatenate_videoclips(clips)
+                final_clip.write_videofile(temp_video_path, codec="libx264", audio_codec="aac", verbose=False, logger=None)
+                final_clip.close()
+                
+                # 关闭所有剪辑释放资源
+                for clip in clips:
+                    clip.close()
+                    
+                return temp_video_path
+            else:
+                return video_path
+                
+    except Exception as e:
+        print(f"创建采样视频时出错: {e}")
+        return video_path
 
 def get_video_duration(video_path):
-    """Get duration of video in seconds"""
+    """获取视频时长（秒）[7](@ref)"""
     try:
         with VideoFileClip(video_path) as video:
             return video.duration
     except:
-        return float('inf')  # Return infinity if there's an error reading the file
+        return float('inf')
 
 class Qwen2_VQA:
     def __init__(self, args):
@@ -57,8 +111,9 @@ class Qwen2_VQA:
         )
 
     def setup_model(self):
-        """设置和加载模型"""
+        """设置和加载模型[2,4](@ref)"""
         model_id = f"qwen/{self.args.model}"
+        #model_id = "thesby/Qwen2.5-VL-7B-NSFW-Caption-V4"
         self.model_checkpoint = os.path.join(
             "models", "prompt_generator", os.path.basename(model_id)
         )
@@ -95,23 +150,31 @@ class Qwen2_VQA:
             )
 
     def process_video(self, video_path, output_dir):
-        """处理单个视频文件"""
-        # 复制视频文件到输出目录
+        """处理单个视频文件[2,5](@ref)"""
         video_name = os.path.basename(video_path)
-
         duration = get_video_duration(video_path)
-        print("video :", video_path, "duration :", duration)
-        if duration >= 10:
-            print("skip")
-            return
         
+        print(f"处理视频: {video_name}, 时长: {duration}秒, 采样阈值: {self.args.sample_duration}秒")
+        
+        # 复制原视频到输出目录（保持原视频）
         output_video_path = os.path.join(output_dir, video_name)
         shutil.copy2(video_path, output_video_path)
         
-        # 准备系统提示词 - 可从命令行参数获取
+        # 对超过采样时长的视频创建采样版本进行处理
+        processing_video_path = video_path
+        is_sampled = False
+        
+        if duration > self.args.sample_duration:
+            print(f"视频超过{self.args.sample_duration}秒，创建采样版本...")
+            processing_video_path = create_sampled_video(video_path, self.args.sample_duration)
+            is_sampled = True
+            sampled_duration = get_video_duration(processing_video_path)
+            print(f"采样视频时长: {sampled_duration}秒")
+        
+        # 准备系统提示词
         system_content = self.args.system_content if self.args.system_content else '''You are QwenVL, you are a helpful assistant expert in turning images into words.\n 给你的视频中可能出现的主要人物为两个（可能出现一个或两个），当人物为一个戴眼罩的男孩时，男孩的名字是"夏尔",当人物是一个穿燕尾西服的成年男子时，男子的名字是"塞巴斯蒂安",在你的视频描述中要使用人物的名字并且简单描述人物的外貌及衣着。'''
         
-        video_path = [{'type': 'video', 'video': video_path, 'fps': 1.0}]
+        video_input = [{'type': 'video', 'video': processing_video_path, 'fps': 1.0}]
         messages = [
             {
                 "role": "system",
@@ -119,63 +182,76 @@ class Qwen2_VQA:
             },
             {
                 "role": "user",
-                "content": video_path + [
+                "content": video_input + [
                     {"type": "text", "text": self.args.text},
                 ],
             },
         ]
 
-        with torch.no_grad():
-            # 准备推理输入
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            image_inputs, video_inputs = process_vision_info(messages)
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt",
-            )
-            inputs = inputs.to(self.device)
-            
-            # 推理：生成输出
-            generated_ids = self.model.generate(
-                **inputs, 
-                max_new_tokens=self.args.max_new_tokens, 
-                temperature=self.args.temperature
-            )
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):]
-                for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-            ]
-            result = self.processor.batch_decode(
-                generated_ids_trimmed,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )[0]
+        try:
+            with torch.no_grad():
+                # 准备推理输入[2,3](@ref)
+                text = self.processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                image_inputs, video_inputs = process_vision_info(messages)
+                inputs = self.processor(
+                    text=[text],
+                    images=image_inputs,
+                    videos=video_inputs,
+                    padding=True,
+                    return_tensors="pt",
+                )
+                inputs = inputs.to(self.device)
+                
+                # 推理：生成输出[1,4](@ref)
+                generated_ids = self.model.generate(
+                    **inputs, 
+                    max_new_tokens=self.args.max_new_tokens, 
+                    temperature=self.args.temperature
+                )
+                generated_ids_trimmed = [
+                    out_ids[len(in_ids):]
+                    for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+                ]
+                result = self.processor.batch_decode(
+                    generated_ids_trimmed,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )[0]
 
-        # 保存结果到文本文件
-        txt_filename = os.path.splitext(video_name)[0] + ".txt"
-        txt_path = os.path.join(output_dir, txt_filename)
-        result = result.split("addCriterion")[0].strip()
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            f.write(result)
-        
-        # 在命令行打印caption
-        print(f"Video: {video_name}")
-        print(f"Caption: {result}")
-        print("-" * 50)
-        
-        return result
+            # 保存结果到文本文件（使用原视频名称）
+            txt_filename = os.path.splitext(video_name)[0] + ".txt"
+            txt_path = os.path.join(output_dir, txt_filename)
+            result = result.split("addCriterion")[0].strip()
+            
+            # 在描述中注明是否使用了采样视频
+            if is_sampled:
+                result = f"[基于{self.args.sample_duration}秒采样] {result}"
+            
+            with open(txt_path, 'w', encoding='utf-8') as f:
+                f.write(result)
+            
+            # 在命令行打印caption
+            print(f"Video: {video_name}")
+            print(f"Caption: {result}")
+            print("-" * 50)
+            
+            return result
+            
+        finally:
+            # 清理临时采样视频文件
+            if is_sampled and processing_video_path != video_path:
+                try:
+                    if os.path.exists(processing_video_path):
+                        os.remove(processing_video_path)
+                        print(f"已清理临时采样视频: {processing_video_path}")
+                except:
+                    pass
 
     def process_all_videos(self):
         """处理所有视频文件"""
-        # 创建输出目录
         os.makedirs(self.args.output_dir, exist_ok=True)
-        
-        # 设置模型
         self.setup_model()
         
         # 处理单个视频文件
@@ -204,12 +280,16 @@ class Qwen2_VQA:
             torch.cuda.ipc_collect()
 
 def main():
-    """命令行主函数"""
+    """命令行主函数[1,4](@ref)"""
     parser = argparse.ArgumentParser(description="Qwen2.5-VL视频描述生成工具")
     
     # 必需参数
     parser.add_argument("source_path", help="输入视频文件路径或包含视频的文件夹路径")
     parser.add_argument("output_dir", help="输出目录路径")
+    
+    # 新增：可配置的采样时长参数
+    parser.add_argument("--sample_duration", type=int, default=5,
+                       help="视频采样时长阈值（秒），超过此时长的视频将进行采样处理，默认5秒")
     
     # 模型参数
     parser.add_argument("--model", default="Qwen2.5-VL-7B-Instruct",
@@ -247,11 +327,9 @@ def main():
     
     args = parser.parse_args()
     
-    # 设置随机种子
     if args.seed != -1:
         torch.manual_seed(args.seed)
     
-    # 创建处理器并处理视频
     processor = Qwen2_VQA(args)
     processor.process_all_videos()
 
