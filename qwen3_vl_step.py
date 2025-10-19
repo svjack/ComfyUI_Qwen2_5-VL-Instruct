@@ -300,4 +300,88 @@ if __name__ == "__main__":
 
 # 使用中文描述这个图片是如何根据上一个图片用相同的画风进行编辑得到的,不要指出人物的名字或出处或其它猜测，只严格描述进行了哪些在同一画风下的编辑和改变，注意要将这个照片中与上一张照片中画风相对应的部分进行提及，对物体取代、色彩变化、整体画风遵循进行对应描述。
 
+vllm serve Qwen3-VL-4B-Instruct \
+  --tensor-parallel-size 1 \
+  --limit-mm-per-prompt.video 0 \
+  --async-scheduling \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 10240
+
+import time
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:8000/v1",
+    timeout=3600
+)
+
+import base64
+
+def image_to_data_url(image_path):
+    with open(image_path, "rb") as image_file:
+        base64_data = base64.b64encode(image_file.read()).decode('utf-8')
+        return f"data:image/jpeg;base64,{base64_data}"
+
+# 使用示例
+image_data_url = image_to_data_url("IMG_0.jpeg")
+
+messages = [
+    {
+        "role": "user", 
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image_data_url
+                }
+            },
+            {
+                "type": "text",
+                "text": "使用中文描述这个图片，不要指出人物的名字或出处或其它猜测，只严格描述画面中不同部分的物体与整体风格特征。"
+            }
+        ]
+    }
+]
+
+start = time.time()
+response = client.chat.completions.create(
+    model="Qwen3-VL-4B-Instruct",
+    messages=messages,
+    max_tokens=1024
+)
+print(f"Response costs: {time.time() - start:.2f}s")
+print(f"Generated text: {response.choices[0].message.content}")
+
+# 使用示例
+image_data_url = image_to_data_url("IMG_1.jpeg")
+
+messages += [
+        {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": response.choices[0].message.content},
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {"url" : image_data_url},
+            },
+            {"type": "text", "text": "使用中文描述这个图片是如何根据上一个图片用相同的画风进行编辑得到的,不要指出人物的名字或出处或其它猜测，只严格描述进行了哪些在同一画风下的编辑和改变，注意要将这个照片中与上一张照片中画风相对应的部分进行提及，对物体取代、色彩变化、整体画风遵循进行对应描述。以'进行下面的修改：'开头"},
+        ],
+    }
+]
+
+start = time.time()
+response = client.chat.completions.create(
+    model="Qwen3-VL-4B-Instruct",
+    messages=messages,
+    max_tokens=1024
+)
+print(f"Response costs: {time.time() - start:.2f}s")
+print(f"Generated text: {response.choices[0].message.content}")
+
 
