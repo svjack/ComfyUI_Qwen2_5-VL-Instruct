@@ -307,13 +307,6 @@ vllm serve Qwen3-VL-4B-Instruct \
   --gpu-memory-utilization 0.95 \
   --max-model-len 20480
 
-vllm serve Qwen3-VL-8B-Instruct \
-  --tensor-parallel-size 1 \
-  --limit-mm-per-prompt.video 0 \
-  --async-scheduling \
-  --gpu-memory-utilization 0.95 \
-  --max-model-len 10240
-
 import time
 from openai import OpenAI
 
@@ -391,4 +384,205 @@ response = client.chat.completions.create(
 print(f"Response costs: {time.time() - start:.2f}s")
 print(f"Generated text: {response.choices[0].message.content}")
 
+vllm serve Qwen3-VL-8B-Instruct \
+  --tensor-parallel-size 1 \
+  --limit-mm-per-prompt.video 0 \
+  --async-scheduling \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 10240
+
+import os
+import base64
+import time
+from openai import OpenAI
+from PIL import Image
+import ast
+from datasets import load_dataset
+from tqdm import tqdm
+import json
+
+# 初始化OpenAI客户端
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:8000/v1",
+    timeout=3600
+)
+
+def image_to_data_url(image_path):
+    """将图像文件转换为data URL格式"""
+    with open(image_path, "rb") as image_file:
+        base64_data = base64.b64encode(image_file.read()).decode('utf-8')
+        return f"data:image/jpeg;base64,{base64_data}"
+
+def save_pil_image(image, output_dir, index):
+    """保存PIL图像到文件[6,7](@ref)"""
+    # 创建输出目录（如果不存在）
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 生成文件名（带前导零的6位数字）
+    filename = f"{index:06d}.jpg"
+    filepath = os.path.join(output_dir, filename)
+    
+    # 保存图像[6](@ref)
+    image.save(filepath, "JPEG", quality=95)
+    return filepath
+
+def process_dataset_sample(sample, index, output_dir):
+    """处理单个数据集样本"""
+    try:
+        # 获取图像和names列
+        pil_image = sample['image']
+        names_str = sample['names']
+        
+        # 将names字符串转换为列表[1](@ref)
+        if isinstance(names_str, str):
+            names_list = ast.literal_eval(names_str)
+        else:
+            names_list = names_str
+        
+        # 保存图像到临时文件
+        image_path = save_pil_image(pil_image, os.path.join(output_dir, "images"), index)
+        
+        # 构建消息
+        messages = []
+        for name in names_list:
+            # 注意：这里需要根据你实际的人物图片路径调整
+            # 假设人物图片在 Genshin_Impact_Portrait_chr 目录下
+            character_image_path = f"Genshin_Impact_Portrait_chr/{name}.png"
+            if os.path.exists(character_image_path):
+                messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_to_data_url(character_image_path)},
+                        },
+                        {"type": "text", "text": f"这个是人物'{name}'的图片，请记住它的特征。"},
+                    ],
+                })
+        
+        # 添加主要查询消息
+        messages += [
+            {
+                "role": "user", 
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_to_data_url(image_path)}
+                    },
+                    {
+                        "type": "text",
+                        "text": f"现在根据你知道的各个人物的名字，给出漫画格的位置叙述，将上面对漫画的描写中人物的名字加到叙述中，未提到的人物则保持原来的叙述，得到漫画描述，以'下面是对漫画每格的描述:\\n...'为格式",
+                    }
+                ]
+            }
+        ]
+        
+        # 调用API
+        start_time = time.time()
+        response = client.chat.completions.create(
+            model="Qwen3-VL-8B-Instruct",
+            messages=messages,
+            max_tokens=1024
+        )
+        
+        # 保存结果到文本文件
+        result_text = response.choices[0].message.content
+        txt_filename = f"{index:06d}.txt"
+        txt_filepath = os.path.join(output_dir, txt_filename)
+        
+        with open(txt_filepath, "w", encoding="utf-8") as f:
+            f.write(result_text)
+        
+        # 清理临时图像文件
+        os.remove(image_path)
+        
+        return {
+            "index": index,
+            "names": names_list,
+            "response_time": time.time() - start_time,
+            "text_length": len(result_text)
+        }
+        
+    except Exception as e:
+        print(f"处理样本 {index} 时出错: {e}")
+        return None
+
+def main():
+    """主函数"""
+    # 配置参数
+    dataset_name = "svjack/Genshin-Impact-Manga-Rm-Text-3-Named"
+    output_dir = "output_results"
+    max_samples = None  # 设置为None处理所有样本，或设置具体数字进行测试
+    
+    print("正在加载数据集...")
+    
+    try:
+        # 加载数据集[3](@ref)
+        dataset = load_dataset(dataset_name)
+        
+        # 假设我们使用训练集
+        if 'train' in dataset:
+            data = dataset['train']
+        else:
+            data = dataset
+            
+        print(f"数据集加载成功，包含 {len(data)} 个样本")
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "images"), exist_ok=True)
+        
+        # 处理样本
+        successful_count = 0
+        failed_count = 0
+        results = []
+        
+        # 确定要处理的样本范围
+        if max_samples is not None:
+            indices = range(min(max_samples, len(data)))
+        else:
+            indices = range(len(data))
+        
+        print("开始处理样本...")
+        for i in tqdm(indices, desc="处理进度"):
+            sample = data[i]
+            result = process_dataset_sample(sample, i, output_dir)
+            
+            if result is not None:
+                successful_count += 1
+                results.append(result)
+            else:
+                failed_count += 1
+            
+            # 添加延迟避免API过载
+            time.sleep(1)
+        
+        # 保存处理统计信息
+        stats = {
+            "total_processed": len(indices),
+            "successful": successful_count,
+            "failed": failed_count,
+            "success_rate": successful_count / len(indices) if len(indices) > 0 else 0,
+            "results": results
+        }
+        
+        with open(os.path.join(output_dir, "processing_stats.json"), "w", encoding="utf-8") as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+        
+        print(f"\n处理完成！")
+        print(f"总处理样本: {len(indices)}")
+        print(f"成功: {successful_count}")
+        print(f"失败: {failed_count}")
+        print(f"成功率: {stats['success_rate']:.2%}")
+        
+        if results:
+            avg_time = sum(r['response_time'] for r in results) / len(results)
+            print(f"平均响应时间: {avg_time:.2f}秒")
+        
+    except Exception as e:
+        print(f"处理数据集时发生错误: {e}")
+
+if __name__ == "__main__":
+    main()
 
