@@ -305,6 +305,13 @@ vllm serve Qwen3-VL-4B-Instruct \
   --limit-mm-per-prompt.video 0 \
   --async-scheduling \
   --gpu-memory-utilization 0.95 \
+  --max-model-len 20480
+
+vllm serve Qwen3-VL-8B-Instruct \
+  --tensor-parallel-size 1 \
+  --limit-mm-per-prompt.video 0 \
+  --async-scheduling \
+  --gpu-memory-utilization 0.95 \
   --max-model-len 10240
 
 import time
