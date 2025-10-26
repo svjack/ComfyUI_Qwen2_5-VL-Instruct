@@ -1,3 +1,10 @@
+vllm serve Qwen3-VL-4B-Instruct \
+  --tensor-parallel-size 1 \
+  --limit-mm-per-prompt.video 0 \
+  --async-scheduling \
+  --gpu-memory-utilization 0.95 \
+  --max-model-len 20480
+
 #!/usr/bin/env python3
 """
 视频描述生成脚本
