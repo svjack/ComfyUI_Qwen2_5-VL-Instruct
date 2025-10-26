@@ -5,15 +5,6 @@ vllm serve Qwen3-VL-4B-Instruct \
   --gpu-memory-utilization 0.95 \
   --max-model-len 20480
 
-#!/usr/bin/env python3
-"""
-视频描述生成脚本
-使用GPT视觉能力分析视频内容并生成描述
-支持自定义模型和API端点
-"""
-
-
-
 import cv2
 import base64
 import time
@@ -22,12 +13,14 @@ from pathlib import Path
 from openai import OpenAI
 import argparse
 import json
-from typing import List, Optional
+from typing import List, Optional, Union
+from PIL import Image
+import numpy as np
 
-class VideoDescriber:
+class MediaDescriber:
     def __init__(self, api_key: str = "EMPTY", base_url: str = "http://localhost:8000/v1", timeout: int = 3600):
         """
-        初始化视频描述生成器
+        初始化媒体描述生成器
         
         Args:
             api_key: API密钥
@@ -40,9 +33,9 @@ class VideoDescriber:
             timeout=timeout
         )
     
-    def extract_frames(self, video_path: str, frame_interval: int = 25, max_frames: int = 20) -> List[str]:
+    def extract_video_frames(self, video_path: str, frame_interval: int = 25, max_frames: int = 20) -> List[str]:
         """
-        从视频中提取帧并编码为base64
+        从视频中提取帧并编码为base64 [1,2](@ref)
         
         Args:
             video_path: 视频文件路径
@@ -80,28 +73,99 @@ class VideoDescriber:
         print(f"成功提取 {len(base64_frames)} 帧 (总帧数: {frame_count})")
         return base64_frames
     
-    def generate_video_description(self, base64_frames: List[str], 
+    def process_image_file(self, image_path: str, max_size: tuple = (768, 432)) -> List[str]:
+        """
+        处理单张图片并编码为base64 [2](@ref)
+        
+        Args:
+            image_path: 图片文件路径
+            max_size: 最大尺寸限制
+            
+        Returns:
+            base64编码的图片列表
+        """
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"图片文件不存在: {image_path}")
+        
+        print(f"正在处理图片: {image_path}")
+        
+        # 使用PIL打开图片并调整大小
+        img = Image.open(image_path)
+        img = img.convert('RGB')
+        img.thumbnail(max_size, Image.Resampling.LANCZOS)
+        
+        # 转换为OpenCV格式
+        img_cv = np.array(img)
+        img_cv = img_cv[:, :, ::-1].copy()  # RGB转BGR
+        
+        # 编码为base64
+        _, buffer = cv2.imencode(".jpg", img_cv, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        base64_image = base64.b64encode(buffer).decode("utf-8")
+        
+        return [base64_image]
+    
+    def extract_media_frames(self, media_path: str, **kwargs) -> List[str]:
+        """
+        统一媒体处理入口：自动检测类型并提取帧 [1,2](@ref)
+        
+        Args:
+            media_path: 媒体文件路径
+            **kwargs: 其他参数
+            
+        Returns:
+            base64编码的帧列表
+        """
+        # 检查文件是否存在
+        if not os.path.exists(media_path):
+            raise FileNotFoundError(f"媒体文件不存在: {media_path}")
+        
+        # 获取文件扩展名并转换为小写
+        file_ext = Path(media_path).suffix.lower()
+        
+        # 视频格式列表 [1,4](@ref)
+        video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.m4v', '.webm']
+        # 图片格式列表 [4](@ref)
+        image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp']
+        
+        if file_ext in video_extensions:
+            print("检测到视频文件，使用视频处理模式")
+            return self.extract_video_frames(media_path, **kwargs)
+        elif file_ext in image_extensions:
+            print("检测到图片文件，使用图片处理模式")
+            return self.process_image_file(media_path)
+        else:
+            raise ValueError(f"不支持的媒体格式: {file_ext}。支持格式: {video_extensions + image_extensions}")
+    
+    def generate_media_description(self, base64_frames: List[str], 
+                                 media_type: str = "auto",
                                  model: str = "gpt-4-vision-preview",
                                  prompt: str = None,
                                  max_tokens: int = 500,
                                  temperature: float = 0.7) -> str:
         """
-        使用视觉模型生成视频描述
+        使用视觉模型生成媒体描述 [6,7](@ref)
         
         Args:
-            base64_frames: base64编码的视频帧列表
+            base64_frames: base64编码的媒体帧列表
+            media_type: 媒体类型 (video/image/auto)
             model: 使用的模型名称
             prompt: 自定义提示词
             max_tokens: 最大token数
             temperature: 温度参数
             
         Returns:
-            视频描述文本
+            媒体描述文本
         """
         if not base64_frames:
             raise ValueError("帧列表不能为空")
         
-        default_prompt = """请仔细分析这些视频帧，生成一个全面、生动的视频描述。
+        # 自动检测媒体类型
+        if media_type == "auto":
+            media_type = "视频" if len(base64_frames) > 1 else "图片"
+        
+        # 默认提示词模板 [8](@ref)
+        default_prompts = {
+            "video": """请仔细分析这些视频帧，生成一个全面、生动的视频描述。
 描述应该包含以下要素：
 1. 视频的主要内容和主题
 2. 场景设置和环境描述
@@ -109,15 +173,32 @@ class VideoDescriber:
 4. 视觉风格、色彩和光线特点
 5. 整体氛围和情感基调
 
+请用中文提供详细、专业的描述。""",
+            
+            "image": """请仔细分析这张图片，生成一个全面、生动的图片描述。
+描述应该包含以下要素：
+1. 图片的主要内容和主题
+2. 场景设置和环境描述
+3. 出现的对象、人物或动物及其特征
+4. 构图、视觉风格、色彩和光线特点
+5. 整体氛围和情感基调
+
 请用中文提供详细、专业的描述。"""
+        }
         
-        user_prompt = prompt or default_prompt
+        # 选择提示词
+        if prompt:
+            user_prompt = prompt
+        else:
+            prompt_key = "video" if len(base64_frames) > 1 else "image"
+            user_prompt = default_prompts.get(prompt_key, default_prompts["image"])
         
         # 构建消息内容
         content = [{"type": "text", "text": user_prompt}]
         
-        # 添加图像帧（限制数量以避免token超限）
-        sampled_frames = base64_frames[:10]  # 最多使用10帧
+        # 限制帧数量以避免token超限
+        max_frames_to_send = 10 if len(base64_frames) > 1 else 1
+        sampled_frames = base64_frames[:max_frames_to_send]
         
         for i, frame in enumerate(sampled_frames):
             content.append({
@@ -129,7 +210,7 @@ class VideoDescriber:
             })
         
         try:
-            print(f"正在使用模型 {model} 生成视频描述...")
+            print(f"正在使用模型 {model} 生成{media_type}描述...")
             start_time = time.time()
             
             response = self.client.chat.completions.create(
@@ -151,26 +232,28 @@ class VideoDescriber:
             return description.strip()
             
         except Exception as e:
-            print(f"生成视频描述时出错: {e}")
+            print(f"生成{media_type}描述时出错: {e}")
             return ""
     
-    def process_video(self, video_path: str, 
+    def process_media(self, media_path: str, 
                      output_dir: str = "output",
                      model: str = "gpt-4-vision-preview",
+                     media_type: str = "auto",
                      frame_interval: int = 25,
                      max_frames: int = 20,
                      prompt: str = None,
                      max_tokens: int = 500,
                      temperature: float = 0.7) -> dict:
         """
-        完整处理视频并生成描述
+        完整处理媒体文件并生成描述 [6,7](@ref)
         
         Args:
-            video_path: 输入视频路径
+            media_path: 输入媒体文件路径
             output_dir: 输出目录
             model: 使用的模型名称
-            frame_interval: 帧采样间隔
-            max_frames: 最大帧数限制
+            media_type: 媒体类型 (video/image/auto)
+            frame_interval: 帧采样间隔（仅视频）
+            max_frames: 最大帧数限制（仅视频）
             prompt: 自定义提示词
             max_tokens: 最大token数
             temperature: 温度参数
@@ -182,22 +265,36 @@ class VideoDescriber:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        # 提取视频帧
-        base64_frames = self.extract_frames(video_path, frame_interval, max_frames)
+        # 提取媒体帧
+        extract_args = {}
+        if media_type in ["auto", "video"]:
+            extract_args = {
+                "frame_interval": frame_interval,
+                "max_frames": max_frames
+            }
+        
+        base64_frames = self.extract_media_frames(media_path, **extract_args)
         
         if not base64_frames:
-            raise ValueError("无法从视频中提取帧或视频为空")
+            raise ValueError("无法从媒体文件中提取内容或文件为空")
+        
+        # 确定媒体类型
+        detected_type = "video" if len(base64_frames) > 1 else "image"
+        if media_type == "auto":
+            media_type = detected_type
         
         results = {
-            'video_path': video_path,
+            'media_path': media_path,
+            'media_type': media_type,
             'frames_extracted': len(base64_frames),
             'model_used': model
         }
         
-        # 生成视频描述
-        print("正在生成视频描述...")
-        description = self.generate_video_description(
+        # 生成媒体描述
+        print(f"正在生成{media_type}描述...")
+        description = self.generate_media_description(
             base64_frames=base64_frames,
+            media_type=media_type,
             model=model,
             prompt=prompt,
             max_tokens=max_tokens,
@@ -207,23 +304,25 @@ class VideoDescriber:
         results['description'] = description
         results['description_length'] = len(description)
         
-        print("视频描述生成完成!")
+        print(f"{media_type.capitalize()}描述生成完成!")
         print(f"描述长度: {len(description)} 字符")
         print(f"描述内容: {description}")
         
         # 保存文本结果
         timestamp = int(time.time())
-        text_output_path = output_path / f"video_description_{timestamp}.txt"
-        json_output_path = output_path / f"results_{timestamp}.json"
+        media_name = Path(media_path).stem
+        text_output_path = output_path / f"{media_type}_description_{media_name}_{timestamp}.txt"
+        json_output_path = output_path / f"{media_type}_results_{media_name}_{timestamp}.json"
         
         # 保存纯文本描述
         with open(text_output_path, 'w', encoding='utf-8') as f:
-            f.write("=== 视频分析结果 ===\n\n")
-            f.write(f"视频文件: {video_path}\n")
+            f.write(f"=== {media_type.capitalize()}分析结果 ===\n\n")
+            f.write(f"媒体文件: {media_path}\n")
+            f.write(f"媒体类型: {media_type}\n")
             f.write(f"分析模型: {model}\n")
             f.write(f"分析时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"提取帧数: {len(base64_frames)}\n")
-            f.write("\n=== 视频描述 ===\n\n")
+            f.write(f"\n=== {media_type.capitalize()}描述 ===\n\n")
             f.write(description + "\n")
         
         # 保存JSON结果
@@ -238,14 +337,16 @@ class VideoDescriber:
 
 def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description="视频描述生成脚本")
-    parser.add_argument("video_path", help="输入视频文件路径")
+    parser = argparse.ArgumentParser(description="媒体描述生成脚本（支持图片和视频）")
+    parser.add_argument("media_path", help="输入媒体文件路径（支持图片和视频）")
+    parser.add_argument("--media-type", choices=["auto", "video", "image"], default="auto",
+                       help="媒体类型：auto(自动检测)/video/image")
     parser.add_argument("--output-dir", default="output", help="输出目录")
     parser.add_argument("--model", default="gpt-4-vision-preview", help="使用的模型名称")
     parser.add_argument("--frame-interval", type=int, default=25, 
-                       help="帧采样间隔（默认: 25）")
+                       help="帧采样间隔（仅视频，默认: 25）")
     parser.add_argument("--max-frames", type=int, default=20, 
-                       help="最大帧数限制（默认: 20）")
+                       help="最大帧数限制（仅视频，默认: 20）")
     parser.add_argument("--max-tokens", type=int, default=500, 
                        help="最大token数（默认: 500）")
     parser.add_argument("--temperature", type=float, default=0.7, 
@@ -260,17 +361,18 @@ def main():
     
     try:
         # 初始化描述器
-        describer = VideoDescriber(
+        describer = MediaDescriber(
             api_key=args.api_key,
             base_url=args.base_url,
             timeout=args.timeout
         )
         
-        # 处理视频
-        results = describer.process_video(
-            video_path=args.video_path,
+        # 处理媒体文件
+        results = describer.process_media(
+            media_path=args.media_path,
             output_dir=args.output_dir,
             model=args.model,
+            media_type=args.media_type,
             frame_interval=args.frame_interval,
             max_frames=args.max_frames,
             prompt=args.prompt,
@@ -279,50 +381,74 @@ def main():
         )
         
         print("\n=== 处理摘要 ===")
-        print(f"视频文件: {results['video_path']}")
+        print(f"媒体文件: {results['media_path']}")
+        print(f"媒体类型: {results['media_type']}")
         print(f"使用模型: {results['model_used']}")
         print(f"提取帧数: {results['frames_extracted']}")
         print(f"描述长度: {results['description_length']} 字符")
         
     except Exception as e:
-        print(f"处理视频时出错: {e}")
+        print(f"处理媒体文件时出错: {e}")
         return 1
     
     return 0
 
 '''
 if __name__ == "__main__":
-    # 使用默认配置的示例
+    # 使用示例
     if False:  # 设置为True可直接运行示例
-        describer = VideoDescriber(
+        describer = MediaDescriber(
             api_key="EMPTY",
             base_url="http://localhost:8000/v1",
             timeout=3600
         )
         
         # 处理示例视频
-        results = describer.process_video(
-            video_path="your_video.mp4",
-            model="gpt-4-vision-preview"
+        video_results = describer.process_media(
+            media_path="your_video.mp4",
+            model="Qwen3-VL-4B-Instruct",
+            media_type="auto"
+        )
+        
+        # 处理示例图片
+        image_results = describer.process_media(
+            media_path="your_image.jpg",
+            model="Qwen3-VL-4B-Instruct",
+            media_type="auto"
         )
     else:
         exit(main())
 '''
 
-describer = VideoDescriber(
+describer = MediaDescriber(
             api_key="EMPTY",
             base_url="http://localhost:8000/v1",
             timeout=3600
         )
 
-
-results = describer.process_video(
-            video_path="Little_Xiang_Lookalike_Videos/0AqKqJYU6lBAKyfI.mp4",
+results = describer.process_media(
+            media_path="Little_Xiang_Lookalike_Videos/0AqKqJYU6lBAKyfI.mp4",
             model="Qwen3-VL-4B-Instruct",
             max_tokens = 1024,
             frame_interval = 10,
             max_frames = 10,
+            media_type="auto",
             prompt = "使用中文描述视频内容，视频的主体为一个男孩，使用'男孩'进行称呼，描述男孩的外貌、动作和背景信息，只描述结果，不进行任何其他讨论。",
         )
+print(results["description"])
+
+
+results = describer.process_media(
+            media_path="Little_Xiang_Lookalike_Images/G3n28NwWkAA7n9B.jpg",
+            model="Qwen3-VL-4B-Instruct",
+            max_tokens = 1024,
+            frame_interval = 10,
+            max_frames = 10,
+            media_type="auto",
+            prompt = "使用中文描述图片内容，图片的主体为一个男孩，使用'男孩'进行称呼，描述男孩的外貌、动作和背景信息，只描述结果，不进行任何其他讨论。",
+        )
+print(results["description"])
+
+
 
 
