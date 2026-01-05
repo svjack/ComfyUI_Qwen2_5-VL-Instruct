@@ -613,3 +613,335 @@ prompt = '''
         
         将你分上面不同维度的分析结果合成一段关于这个画面的中文描述，不进行任何讨论，直接给出中文结果。
         '''
+
+
+### three bind position labeled
+
+import os
+import base64
+import time
+from openai import OpenAI
+from PIL import Image
+import ast
+from tqdm import tqdm
+import json
+import uuid
+
+# 初始化OpenAI客户端
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:8000/v1",
+    timeout=3600
+)
+
+def image_to_data_url(image_path):
+    """将图像文件转换为data URL格式[1,6](@ref)"""
+    with open(image_path, "rb") as image_file:
+        base64_data = base64.b64encode(image_file.read()).decode('utf-8')
+        return f"data:image/jpeg;base64,{base64_data}"
+
+def save_pil_image(image, output_path):
+    """保存PIL图像到文件"""
+    # 创建输出目录（如果不存在）
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # 保存图像
+    image.save(output_path, "JPEG", quality=95)
+    return output_path
+
+def initialize_stats_file(output_dir):
+    """初始化统计文件"""
+    stats_file = os.path.join(output_dir, "processing_stats.json")
+    
+    initial_stats = {
+        "total_processed": 0,
+        "successful": 0,
+        "failed": 0,
+        "success_rate": 0,
+        "results": [],
+        "start_time": time.time(),
+        "last_update": time.time()
+    }
+    
+    with open(stats_file, "w", encoding="utf-8") as f:
+        json.dump(initial_stats, f, ensure_ascii=False, indent=2)
+    
+    return stats_file
+
+def update_stats_incrementally(stats_file, result, status):
+    """增量更新统计信息"""
+    try:
+        # 读取当前的统计信息
+        if os.path.exists(stats_file):
+            with open(stats_file, "r", encoding="utf-8") as f:
+                stats = json.load(f)
+        else:
+            stats = {
+                "total_processed": 0,
+                "successful": 0,
+                "failed": 0,
+                "success_rate": 0,
+                "results": [],
+                "start_time": time.time()
+            }
+        
+        # 更新统计信息
+        stats["total_processed"] += 1
+        stats["last_update"] = time.time()
+        
+        if status == "success":
+            stats["successful"] += 1
+            if result is not None:
+                stats["results"].append({
+                    "original_image": result["original_image"],
+                    "prompt_file": result["prompt_file"],
+                    "response_time": result["response_time"],
+                    "base_filename": result["base_filename"],
+                    "processing_time": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+        else:
+            stats["failed"] += 1
+        
+        # 计算成功率
+        if stats["total_processed"] > 0:
+            stats["success_rate"] = stats["successful"] / stats["total_processed"]
+        
+        # 计算平均处理时间
+        if stats["successful"] > 0:
+            total_time = sum(r["response_time"] for r in stats["results"])
+            stats["average_response_time"] = total_time / stats["successful"]
+        
+        # 增量写入更新后的统计信息
+        with open(stats_file, "w", encoding="utf-8") as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+        
+        return True
+        
+    except Exception as e:
+        print(f"更新统计信息时出错: {e}")
+        return False
+
+def process_single_image(image_path, index, output_dir, stats_file):
+    """处理单张图片：先问位置，再描述场景"""
+    try:
+        # 生成唯一的基础文件名
+        unique_id = uuid.uuid4().hex[:8]
+        base_filename = f"{index:06d}_{unique_id}"
+        
+        # 保存原始图片到输出目录
+        final_output_dir = os.path.join(output_dir, "final_pairs")
+        original_image_path = os.path.join(final_output_dir, f"{base_filename}.jpg")
+        
+        # 打开并保存原始图片
+        img = Image.open(image_path)
+        save_pil_image(img, original_image_path)
+        
+        print(f"正在处理图片: {os.path.basename(image_path)}")
+        
+        # 第一步：询问两个人物在第三张图片中的位置
+        position_messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_to_data_url(image_path)},
+                    },
+                    {
+                        "type": "text", 
+                        "text": "这张图片纵向分为3部分，最左边的是人物1，中间的是人物2，最右边的是人物1与人物2的互动场景。请分析最右边的互动场景，告诉我人物1和人物2分别位于场景的左侧还是右侧？请用简洁的语言回答。"
+                    },
+                ],
+            },
+        ]
+        
+        # 调用API获取位置信息
+        start_time = time.time()
+        position_response = client.chat.completions.create(
+            model="Qwen3-VL-8B-Instruct",
+            messages=position_messages,
+            max_tokens=200
+        )
+        
+        position_text = position_response.choices[0].message.content
+        position_time = time.time() - start_time
+        
+        print(f"位置分析结果: {position_text}")
+        
+        # 第二步：基于位置信息描述第三张图片
+        description_messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_to_data_url(image_path)},
+                    },
+                    {
+                        "type": "text", 
+                        "text": "这张图片纵向分为3部分，最左边的是人物1，中间的是人物2，最右边的是人物1与人物2的互动场景。请分析最右边的互动场景，告诉我人物1和人物2分别位于场景的左侧还是右侧？请用简洁的语言回答。"
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": position_text
+            },
+            {
+                "role": "user", 
+                "content": [
+                    {
+                        "type": "text",
+                        "text": """基于上面两个角色的位置特征和角色特征，请为最右边的第三张图片生成一个详细的提示词描述。
+                        
+要求：
+1. 在你给出的描述中要以“图片1角色”和“图片2角色”称呼第一个角色和第二个角色，而不要提到任何人物名字。
+2. 结合第一个角色和第二个角色的特征，要在叙述的开头描述“图片1角色”和“图片2角色”位于最右边的第三张图片的左边还是右边。
+3. 描述这两个角色在第三张图片中可能的互动场景。
+4. 包括人物表情、衣着、环境背景、角色姿态、情感表达等细节
+5. 保持角色特征的一致性
+6. 生成富有创意且合理的场景描述
+7. 注意对人物的称呼一概为“图片1角色”和“图片2角色”称呼人物
+
+请以以下格式回复：
+角色互动场景描述：
+[你的详细描述]"""
+                    }
+                ]
+            }
+        ]
+        
+        # 调用API获取场景描述
+        description_start_time = time.time()
+        description_response = client.chat.completions.create(
+            model="Qwen3-VL-8B-Instruct",
+            messages=description_messages,
+            max_tokens=500
+        )
+        
+        description_text = description_response.choices[0].message.content
+        description_time = time.time() - description_start_time
+        
+        # 合并两个API调用的结果
+        final_prompt_text = f"""位置分析：
+{position_text}
+
+场景描述：
+{description_text}"""
+        
+        # 保存提示词文本文件
+        txt_filename = f"{base_filename}.txt"
+        txt_filepath = os.path.join(final_output_dir, txt_filename)
+        
+        with open(txt_filepath, "w", encoding="utf-8") as f:
+            f.write(final_prompt_text)
+        
+        # 准备结果数据
+        result = {
+            "index": index,
+            "base_filename": base_filename,
+            "original_image": original_image_path,
+            "prompt_file": txt_filepath,
+            "response_time": position_time + description_time,
+            "position_response": position_text,
+            "description_response": description_text
+        }
+        
+        # 增量更新统计信息
+        update_stats_incrementally(stats_file, result, "success")
+        
+        return result
+        
+    except Exception as e:
+        print(f"处理图片 {image_path} 时出错: {e}")
+        # 更新失败的统计信息
+        update_stats_incrementally(stats_file, None, "failed")
+        return None
+
+def main():
+    """主函数"""
+    # 配置参数
+    input_dir = "output_all_combinations/"  # 输入图片目录
+    output_dir = "output_image_description_pairs"  # 输出目录
+    
+    print("正在准备处理图片...")
+    
+    try:
+        # 获取输入目录中的所有图片文件
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
+        image_files = []
+        
+        if os.path.exists(input_dir):
+            for file in os.listdir(input_dir):
+                if any(file.lower().endswith(ext) for ext in image_extensions):
+                    image_files.append(os.path.join(input_dir, file))
+        
+        if not image_files:
+            print(f"在目录 {input_dir} 中未找到图片文件")
+            return
+        
+        print(f"找到 {len(image_files)} 个图片文件")
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "final_pairs"), exist_ok=True)
+        
+        # 初始化统计文件
+        stats_file = initialize_stats_file(output_dir)
+        print(f"统计文件已初始化: {stats_file}")
+        
+        # 处理图片
+        successful_count = 0
+        failed_count = 0
+        results = []
+        
+        print("开始处理图片...")
+        for i, image_path in enumerate(tqdm(image_files, desc="处理进度")):
+            result = process_single_image(image_path, i, output_dir, stats_file)
+            
+            if result is not None:
+                successful_count += 1
+                results.append(result)
+                print(f"✓ 成功处理: {os.path.basename(image_path)}")
+            else:
+                failed_count += 1
+                print(f"✗ 处理失败: {os.path.basename(image_path)}")
+            
+            # 添加延迟避免API过载
+            time.sleep(2)  # 增加延迟时间，因为现在有两个API调用
+        
+        # 最终统计信息
+        final_stats = {
+            "total_processed": len(image_files),
+            "successful": successful_count,
+            "failed": failed_count,
+            "success_rate": successful_count / len(image_files) if len(image_files) > 0 else 0,
+            "completion_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total_duration": time.time() - time.mktime(time.strptime(
+                open(stats_file, "r", encoding="utf-8").read().split('"start_time": ')[1].split(',')[0], 
+                "%Y-%m-%d %H:%M:%S"
+            )) if os.path.exists(stats_file) else 0
+        }
+        
+        # 保存最终统计信息
+        with open(os.path.join(output_dir, "final_stats.json"), "w", encoding="utf-8") as f:
+            json.dump(final_stats, f, ensure_ascii=False, indent=2)
+        
+        print(f"\n处理完成！")
+        print(f"总处理图片: {len(image_files)}")
+        print(f"成功: {successful_count}")
+        print(f"失败: {failed_count}")
+        print(f"成功率: {final_stats['success_rate']:.2%}")
+        
+        if results:
+            avg_time = sum(r['response_time'] for r in results) / len(results)
+            print(f"平均响应时间: {avg_time:.2f}秒")
+            print(f"输出目录: {os.path.join(output_dir, 'final_pairs')}")
+            print(f"实时统计文件: {stats_file}")
+            print(f"最终统计文件: {os.path.join(output_dir, 'final_stats.json')}")
+        
+    except Exception as e:
+        print(f"处理图片时发生错误: {e}")
+
+if __name__ == "__main__":
+    main()
