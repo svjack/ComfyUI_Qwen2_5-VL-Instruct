@@ -300,7 +300,7 @@ if __name__ == "__main__":
 
 # 使用中文描述这个图片是如何根据上一个图片用相同的画风进行编辑得到的,不要指出人物的名字或出处或其它猜测，只严格描述进行了哪些在同一画风下的编辑和改变，注意要将这个照片中与上一张照片中画风相对应的部分进行提及，对物体取代、色彩变化、整体画风遵循进行对应描述。
 
-vllm serve Qwen3-VL-4B-Instruct \
+vllm serve Qwen3-VL-2B-Instruct \
   --tensor-parallel-size 1 \
   --limit-mm-per-prompt.video 0 \
   --async-scheduling \
