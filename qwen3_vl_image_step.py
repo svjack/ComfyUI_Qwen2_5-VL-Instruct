@@ -307,6 +307,141 @@ vllm serve Qwen3-VL-2B-Instruct \
   --gpu-memory-utilization 0.95 \
   --max-model-len 20480
 
+import os
+import time
+import base64
+from openai import OpenAI
+from tqdm import tqdm
+from pathlib import Path
+
+# 初始化客户端
+client = OpenAI(
+    api_key="EMPTY",
+    base_url="http://localhost:8000/v1",
+    timeout=3600
+)
+
+def image_to_data_url(image_path):
+    """将图片转换为base64数据URL"""
+    with open(image_path, "rb") as image_file:
+        base64_data = base64.b64encode(image_file.read()).decode('utf-8')
+        return f"data:image/jpeg;base64,{base64_data}"
+
+def generate_caption(image_path):
+    """为单张图片生成描述"""
+    try:
+        image_data_url = image_to_data_url(image_path)
+        
+        messages = [
+            {
+                "role": "user", 
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data_url
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": "使用中文详细描述这个图片，图片中的人物是王翔，是一个男性，详细描述人物的外观、衣着、动作等。注意要指出人物出现在画面中的是哪些部分（全身、半身、头部、身体等），直接给出你的结果。不进行任何其它讨论，描述要详细，符合格式：男青年王翔..."
+                    }
+                ]
+            }
+        ]
+        
+        start = time.time()
+        response = client.chat.completions.create(
+            model="Qwen3-VL-2B-Instruct",
+            messages=messages,
+            max_tokens=1024
+        )
+        
+        caption = response.choices[0].message.content
+        process_time = time.time() - start
+        
+        return caption, process_time, True
+    except Exception as e:
+        return f"生成描述时出错: {str(e)}", 0, False
+
+def process_images(input_folder, output_folder):
+    """处理输入文件夹中的所有PNG图片"""
+    # 创建输出文件夹
+    output_path = Path(output_folder)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # 获取所有PNG图片
+    input_path = Path(input_folder)
+    image_files = list(input_path.glob("*.png"))
+    
+    if not image_files:
+        print(f"在文件夹 {input_folder} 中没有找到PNG图片")
+        return
+    
+    print(f"找到 {len(image_files)} 张PNG图片")
+    print(f"输出文件夹: {output_folder}")
+    
+    # 统计信息
+    success_count = 0
+    total_time = 0
+    failed_images = []
+    
+    # 使用tqdm显示进度
+    for img_path in tqdm(image_files, desc="处理图片", unit="张"):
+        # 生成6位数字序号
+        img_num = success_count
+        prefix = f"{img_num:06d}"
+        
+        # 生成描述
+        caption, process_time, success = generate_caption(img_path)
+        
+        if success:
+            # 保存图片到输出文件夹
+            output_img_path = output_path / f"{prefix}.png"
+            
+            # 复制图片文件
+            with open(img_path, 'rb') as src_file:
+                with open(output_img_path, 'wb') as dst_file:
+                    dst_file.write(src_file.read())
+            
+            # 保存描述文本
+            output_txt_path = output_path / f"{prefix}.txt"
+            with open(output_txt_path, 'w', encoding='utf-8') as f:
+                f.write(caption)
+            
+            success_count += 1
+            total_time += process_time
+            
+            tqdm.write(f"✓ 已处理: {img_path.name} -> {prefix}.png/.txt (耗时: {process_time:.2f}s)")
+        else:
+            failed_images.append(img_path.name)
+            tqdm.write(f"✗ 处理失败: {img_path.name} - {caption}")
+    
+    # 打印统计信息
+    print("\n" + "="*50)
+    print("处理完成!")
+    print(f"成功处理: {success_count}/{len(image_files)} 张图片")
+    if success_count > 0:
+        print(f"平均处理时间: {total_time/success_count:.2f}s/张")
+        print(f"总处理时间: {total_time:.2f}s")
+    
+    if failed_images:
+        print(f"\n处理失败的图片 ({len(failed_images)} 张):")
+        for img_name in failed_images:
+            print(f"  - {img_name}")
+
+def main():
+    # 设置输入输出文件夹路径
+    input_folder = "Xiang_Multiscene_Photoshoot_Images"  # 修改为你的输入文件夹路径
+    output_folder = "Xiang_Multiscene_Photoshoot_Images_Captioned"  # 修改为你的输出文件夹路径
+    
+    # 处理图片
+    process_images(input_folder, output_folder)
+
+if __name__ == "__main__":
+    main()
+
+
 vllm serve Qwen3-VL-4B-Instruct \
   --tensor-parallel-size 1 \
   --limit-mm-per-prompt.video 0 \
