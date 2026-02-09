@@ -442,6 +442,72 @@ if __name__ == "__main__":
     main()
 
 
+import os
+import re
+import shutil
+from tqdm import tqdm
+from collections import defaultdict
+
+def split_sentences(text):
+    # 使用正则表达式分句（支持中英文标点）
+    pattern = r'([,，.。！？\.\!\?][”\'")]*)|(?:\n\s*\n)'
+    sentences = []
+    for s in re.split(pattern, text):
+        if s and s.strip():  # 确保 s 不是 None 且非空
+            s = s.strip()
+            # 去掉开头和结尾的标点符号
+            s = re.sub(r'^[,，.。！？\.\!\?\s]+', '', s)
+            s = re.sub(r'[,，.。！？\.\!\?\s]+$', '', s)
+            if s:  # 确保去掉标点后非空
+                sentences.append(s)
+    return sentences
+
+def process_txt_file(txt_path):
+    with open(txt_path, 'r', encoding='utf-8') as f:
+        text = f.read()
+    sentences = split_sentences(text)
+    return sentences
+
+def main(input_folder, output_folder):
+    os.makedirs(output_folder, exist_ok=True)
+
+    # 收集所有文件对
+    file_pairs = []
+    for f in os.listdir(input_folder):
+        if f.endswith('.png'):
+            txt_file = f.replace('.png', '.txt')
+            if os.path.exists(os.path.join(input_folder, txt_file)):
+                file_pairs.append((f, txt_file))
+
+    # 筛选并拷贝
+    copied = 0
+    skipped = 0
+    for png_file, txt_file in tqdm(file_pairs, desc="Processing files"):
+        txt_path = os.path.join(input_folder, txt_file)
+        sentences = process_txt_file(txt_path)
+        # 统计该文件内每个句子的出现次数
+        sentence_count = defaultdict(int)
+        for s in sentences:
+            sentence_count[s] += 1
+        # 如果所有句子都只出现一次，则拷贝
+        if all(c == 1 for c in sentence_count.values()):
+            shutil.copy(os.path.join(input_folder, png_file), output_folder)
+            shutil.copy(os.path.join(input_folder, txt_file), output_folder)
+            copied += 1
+        else:
+            #print(sentences)
+            skipped += 1
+
+    print(f"Copied {copied} file pairs (no duplicate sentences in file).")
+    print(f"Skipped {skipped} file pairs (with duplicate sentences in file).")
+
+if __name__ == "__main__":
+    input_folder = "Xiang_Multiscene_Photoshoot_Images_Captioned/"  # 请替换为你的输入文件夹路径
+    output_folder = "Xiang_Multiscene_Photoshoot_images_captioned"  # 请替换为你的输出文件夹路径
+    main(input_folder, output_folder)
+
+
+
 vllm serve Qwen3-VL-4B-Instruct \
   --tensor-parallel-size 1 \
   --limit-mm-per-prompt.video 0 \
